@@ -1,4 +1,4 @@
-name: "Download Release Assets"
+name: "Smart Download Release"
 description: "Smart download of GitHub release assets with automatic version resolution"
 author: "JD Boivin"
 branding:
