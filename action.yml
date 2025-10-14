@@ -1,0 +1,119 @@
+name: "Download Release Assets"
+description: "Smart download of GitHub release assets with automatic version resolution"
+author: "JD Boivin"
+branding:
+  icon: "download"
+  color: "blue"
+
+inputs:
+  repository:
+    description: "Repository in owner/name format"
+    required: false
+    default: ${{ github.repository }}
+  tag:
+    description: "Release tag or version (supports major versions like v1)"
+    required: false
+    default: ${{ github.action_ref }}
+  pattern:
+    description: "File pattern to download (e.g., '*.zip', 'release.zip')"
+    required: false
+    default: "release.zip"
+  extract-to:
+    description: "Directory to extract files to"
+    required: false
+    default: ${{ runner.temp }}/release
+  token:
+    description: "GitHub token for authentication"
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  resolved-tag:
+    description: "The actual tag that was resolved and downloaded"
+    value: ${{ steps.download.outputs.resolved-tag }}
+  download-path:
+    description: "Path where files were extracted"
+    value: ${{ steps.download.outputs.download-path }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Download and extract release assets
+      id: download
+      shell: bash
+      run: |
+        # Smart version resolution using gh CLI
+        REF="${{ inputs.tag }}"
+        REPO="${{ inputs.repository }}"
+        PATTERN="${{ inputs.pattern }}"
+        EXTRACT_TO="${{ inputs.extract-to }}"
+
+        # If it's a major version like "v1", find the latest v1.x.x
+        if [[ "$REF" =~ ^v[0-9]+$ ]]; then
+          echo "Resolving major version $REF to latest patch version..."
+
+          RESOLVED_TAG=$(gh release list --repo "$REPO" --json tagName --jq ".[].tagName" | \
+            grep "^$REF\." | \
+            sort -V | \
+            tail -n1)
+
+          if [ -z "$RESOLVED_TAG" ]; then
+            echo "No releases found for major version $REF, using latest"
+            RESOLVED_TAG="latest"
+          else
+            echo "Resolved $REF to $RESOLVED_TAG"
+          fi
+        else
+          RESOLVED_TAG="$REF"
+        fi
+
+        # Create extraction directory
+        mkdir -p "$EXTRACT_TO"
+        cd "$EXTRACT_TO"
+
+        # Download the release using gh CLI
+        if [ "$RESOLVED_TAG" = "latest" ]; then
+          echo "Downloading latest release from $REPO with pattern: $PATTERN"
+          gh release download --repo "$REPO" --pattern "$PATTERN"
+        else
+          echo "Downloading release $RESOLVED_TAG from $REPO with pattern: $PATTERN"
+          gh release download "$RESOLVED_TAG" --repo "$REPO" --pattern "$PATTERN"
+        fi
+
+        # Extract archives if they match common archive extensions
+        for file in *; do
+          if [[ -f "$file" ]]; then
+            case "$file" in
+              *.zip)
+                echo "Extracting ZIP archive: $file"
+                unzip -q "$file"
+                rm "$file"
+                ;;
+              *.tar.gz|*.tgz)
+                echo "Extracting TAR.GZ archive: $file"
+                tar -xzf "$file"
+                rm "$file"
+                ;;
+              *.tar)
+                echo "Extracting TAR archive: $file"
+                tar -xf "$file"
+                rm "$file"
+                ;;
+              *)
+                echo "Downloaded file: $file (not extracting)"
+                ;;
+            esac
+          fi
+        done
+
+        # Set outputs
+        echo "resolved-tag=$RESOLVED_TAG" >> $GITHUB_OUTPUT
+        echo "download-path=$(pwd)" >> $GITHUB_OUTPUT
+
+        echo "✅ Download complete!"
+        echo "Resolved tag: $RESOLVED_TAG"
+        echo "Download path: $(pwd)"
+        echo "Files:"
+        ls -la
+      env:
+        GITHUB_TOKEN: ${{ inputs.token }}
